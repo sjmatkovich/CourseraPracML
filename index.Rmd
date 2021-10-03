@@ -30,7 +30,7 @@ will also use your prediction model to predict 20 different test cases.
 
 ### Libraries used
 
-```{r libraries, echo=F, include=T}
+```{r libraries, echo=T, include=T, message=F}
 require(downloader)
 require(e1071)
 require(caret)
@@ -202,7 +202,7 @@ if (detectCores() >= 4) {
 }
 ```
 
-Trained random forest model description with out-of-bag estimate of error rate:
+Trained random forest model description with out-of-bag (OOB) estimate of error rate:
 ```{r}
 modelRF.fit$finalModel
 ```
