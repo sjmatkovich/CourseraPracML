@@ -3,9 +3,6 @@ title: "Coursera PracMachLearn course project (JHU Data Science for R)"
 author: "Scot J Matkovich"
 date: "October 3, 2021"
 output: html_document
-editor_options: 
-  markdown: 
-    wrap: 96
 ---
 
 ```{r setup, include=FALSE}
@@ -37,8 +34,8 @@ will also use your prediction model to predict 20 different test cases.
 require(downloader)
 require(e1071)
 require(caret)
-library(corrplot)
-library(rpart)
+require(corrplot)
+require(rpart)
 require(rattle)
 require(parallel) # for Windows parallel processing
 require(doParallel) # for Windows parallel processing
@@ -161,7 +158,7 @@ Skewness calculations:
 ```{r skewvalues}
 skewValues <- apply(trainCleaned[,-53], 2, skewness)
 ```
-Only a few predictor variables display distributions with |skew| > 25: `r which(abs(skewValues) > 25)`
+Only a few predictor variables display distributions with |skew| > 25: `r colnames(trainCleaned)[which(abs(skewValues) > 25)]`
 
 Inter-variable correlation:
 
@@ -248,20 +245,27 @@ write.table(testResults, file="course_project_test_predictions.txt", sep="\t")
 ## Appendix: Figures
 
 1. Skewness values of training predictor variables
+
 ```{r skew_plot}
 skv <- data.frame(skew=skewValues)
 ggplot(skv, aes(x=skew)) + geom_density()
 ```
+
 2. Correlation plot of training predictor variables
-```{r correl_plot}
+
+```{r correl_plot, warning=FALSE}
 corrplot(trainCleaned.cor, method="square", order="hclust", t1.cex=0.3)
 ```
+
 3. Example visualization of a decision tree (not necessarily from random forest used in this project)
+
 ```{r rattle_plot, cache = T}
 treeModel <- train(classe ~ ., data=trainCleaned, method="rpart", tuneLength=5)
 rattle::fancyRpartPlot(treeModel$finalModel)
 ```
+
 4. Visualization of random forest training for optimal *m~try~*
+
 ```{r rf_plot, cache=T}
 plot(modelRF.fit)
 ```
