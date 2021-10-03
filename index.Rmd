@@ -238,7 +238,6 @@ The trained model will be used to predict the "classe" variable from the cleaned
 ```{r test_finalModel, echo=T}
 testClasse <- predict(modelRF.fit, testCleaned[-53])
 testResults <- data.frame(problem_id=testCleaned$problem_id, classe=testClasse)
-testResults
 write.table(testResults, file="course_project_test_predictions.txt", sep="\t")
 ```
 
