@@ -1,0 +1,267 @@
+---
+title: "Coursera PracMachLearn course project (JHU Data Science for R)"
+author: "Scot J Matkovich"
+date: "October 3, 2021"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 96
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction (Course Project instructions)
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a
+large amount of data about personal activity relatively inexpensively. These type of devices are
+part of the quantified self movement -- a group of enthusiasts who take measurements about
+themselves regularly to improve their health, to find patterns in their behavior, or because
+they are tech geeks. One thing that people regularly do is quantify how much of a particular
+activity they do, but they rarely quantify how well they do it. In this project, your goal will
+be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More
+information is available from the website [here](http://groupware.les.inf.puc-rio.br/har) (see
+the section on the Weight Lifting Exercise Dataset).
+
+The goal of your project is to predict the manner in which they did the exercise. This is the
+"classe" variable in the training set. You may use any of the other variables to predict with.
+You should create a report describing how you built your model, how you used cross validation,
+what you think the expected out of sample error is, and why you made the choices you did. You
+will also use your prediction model to predict 20 different test cases.
+
+### Libraries used
+
+```{r libraries, echo=F, include=T}
+require(downloader)
+require(e1071)
+require(caret)
+library(corrplot)
+library(rpart)
+require(rattle)
+require(parallel) # for Windows parallel processing
+require(doParallel) # for Windows parallel processing
+```
+
+### Data download and import
+
+```{r data import, echo=T}
+
+trainSite <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testSite <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train_csv <- "./data/pml-training.csv"
+test_csv <- "./data/pml-testing.csv"
+
+if (!file.exists("./data")) {
+  dir.create("./data")
+  }
+if (!file.exists(train_csv)) {
+  download(trainSite, destfile=train_csv)
+  }
+if (!file.exists(test_csv)) {
+  download(testSite, destfile=test_csv)
+}
+
+trainInput <- read.csv(train_csv, header=T, row.names=1)
+testInput <- read.csv(test_csv, header=T, row.names=1)
+
+# remove non-numeric descriptor columns but preserve classe (outcome) column
+
+trainData <- trainInput[, sapply(trainInput, is.numeric)]
+testData <- testInput[, sapply(testInput, is.numeric)]
+trainData$classe <- trainInput$classe
+testData$classe <- testInput$classe
+```
+
+For this exercise, columns with any missing values (NA) will be removed from training and test
+sets rather than using an imputation function.
+
+```{r remove missing and descriptor data, echo=T}
+
+train.na <- apply(is.na(trainData), 2, sum)
+train.cols.na <- which(train.na != 0)
+
+test.na <- apply(is.na(testData), 2, sum)
+test.cols.na <- which(test.na != 0)
+
+if (length(train.cols.na) != 0) {
+  trainData.na.removed <- trainData[,-train.cols.na]
+} else {
+  trainData.na.removed <- trainData
+}
+if (length(test.cols.na) != 0) {
+  testData.na.removed <- testData[,-test.cols.na]
+} else {
+  testData.na.removed <- testData
+}
+
+# remove columns including 'timestamp' or 'window' names
+colRemove.train <- grepl("^X|timestamp|window", names(trainData.na.removed))
+trainCleaned <- trainData.na.removed[, !colRemove.train]
+colRemove.test <- grepl("^X|timestamp|window", names(testData.na.removed))
+testCleaned <- testData.na.removed[, !colRemove.test]
+```
+
+Comparison of column (variable) names in cleaned training and test sets:
+
+```{r same column names, echo=T}
+if (ncol(trainCleaned) == ncol(testCleaned)) {
+  print("Training and test sets have same numbers of columns")
+  samecol <- names(trainCleaned) != names(testCleaned)
+  if (sum(samecol) != 0) {
+  print("Training and test sets do not have same column names")
+  print(paste("Different names for column",which(samecol != 0)))
+  print(colnames(trainCleaned)[which(samecol != 0)])
+  print(colnames(testCleaned)[which(samecol != 0)])
+  }
+} else {
+  print("Training and test sets have different numbers of columns")  
+}
+```
+
+It is expected that the training and test data sets contain the same numeric predictor
+variables, but that the training set contains the outcome variable "class" while the test data
+set instead contains the variable "problem_id" for labeling quiz answers.
+
+## Modeling plan
+
+The "classe" variable consists of `r length(unique(trainCleaned)$classe)` categories. A
+classification model rather than a regression strategy would be best suited to predict category
+membership from a combination of numeric predictor variables. The classification models examined
+in this class included:
+
+1.  model-based prediction to define Bayesian decision boundaries (discriminant analysis
+    methods, naive Bayes)
+2.  boosting (weighted addition of a group of weak predictors in a decision tree to obtain a
+    stronger final predictor. Multiple decision trees are grown using information from
+    previously grown trees.)
+3.  random forest (bootstrap aggregation, or 'bagging', on classification/regression trees. Multiple
+    decision trees are built from bootstrapped training samples.) Resampling methods other than the bootstrap can be employed, such as n-fold cross-validation.
+
+Of these, random forests have been described as robust to outliers and capable of handling
+highly correlated predictors. Because random forests force each tree split to use only a random
+subset of the predictors (when *m*, the number of random predictors, is less than *p*, the total
+number of predictors), the multiple trees created by the procedure are largely decorrelated (James et al., An Introduction to Statistical Learning 2nd edition, section 8.2.2).
+
+The tuning parameters for random forests are *m* as described above (also referred to as *k* or
+*m~try~*), and the number of bootstrap samples (trees). The `caret` package will be used to train a random forest model using 10-fold cross-validation, 1000 trees, and default *m~try~* equal to 1/3rd of the predictors, as recommended in Applied Predictive Modeling (Kuhn & Johnson 2013, pp. 200-201).
+
+## Exploratory data analysis
+
+The cleaned training data set contains `r dim(trainCleaned)[1]` observations and
+`r dim(trainCleaned)[2]` variables, including the outcome "classe". The cleaned testing data set
+contains `r dim(testCleaned)[1]` observations and `r (dim(testCleaned)[2] - 1)` predictor
+variables.
+
+Random forest models are described as resistant to outliers, skewed variables and highly correlated variables. Nonetheless, the cleaned training data will be examined for skewness and correlation.
+
+Skewness calculations:
+
+```{r skewvalues}
+skewValues <- apply(trainCleaned[,-53], 2, skewness)
+```
+Only a few predictor variables display distributions with |skew| > 25: `r which(abs(skewValues) > 25)`
+
+Inter-variable correlation:
+
+```{r predictor correlation}
+trainCleaned.cor <- cor(trainCleaned[-53])
+```
+
+Figures are in the Appendix.
+
+## Random forest modeling
+
+To gauge model accuracy (out-of-sample error) the training data set will be split into a new training set and hold-out (validation) set. If accuracy is 99% or over with the chosen tuning parameters, no further model tuning will be performed. Kuhn & Johnson 2013 demonstrate that varying *m~try~* can influence classification sensitivity and specificity (Fig. 14.8, p. 388) and 5 values of *m~try~* will be assessed during model training (tuneLength = 5).
+
+Split the cleaned training data into model training and model validation sets, 70:30 ratio:
+
+```{r split_training}
+set.seed(2273)
+inTrain <- createDataPartition(trainCleaned$classe, p=0.70, list=F)
+trainModel <- trainCleaned[inTrain, ]
+testModel <- trainCleaned[-inTrain, ]
+```
+
+Fit model (using parallel processing capabilities on Windows if available):
+
+```{r rf_modeling_parallel, include = T, eval = T}
+
+# train model using parallel processing on >=2 (flexible) cores if available. To use, change header to eval = T
+
+if (detectCores() >= 4) {
+  cluster <- makeCluster(detectCores() - 2) # leave 2 cores for OS
+  clusterEvalQ(cluster, library(foreach))
+  registerDoParallel(cluster)
+  fitControl <- trainControl(method="cv", number=10, search="grid", allowParallel=TRUE)
+  modelRF.fit <- train(classe ~ ., data=trainModel, method="rf", ntree=1000, tuneLength = 5, trControl=fitControl, do.trace = F)
+ 
+  stopCluster(cluster)
+  registerDoSEQ()
+} else {
+  fitControl <- trainControl(method="cv", number=10)
+  modelRF.fit <- train(classe ~ ., data=trainModel, method="rf", ntree=1000, tuneLength = 5, trControl=fitControl, do.trace = T)
+}
+```
+
+Trained random forest model description with out-of-bag estimate of error rate:
+```{r}
+modelRF.fit$finalModel
+```
+
+See the Appendix for a plot of *m~try~* vs accuracy during cross-validation.
+
+Accuracy on training data:
+
+```{r}
+modelRF.fit$resample
+confusionMatrix.train(modelRF.fit)
+```
+
+Assess model performance against held-out validation data:
+
+```{r rf_validation}
+predictRF <- predict(modelRF.fit, testModel)
+confusionMatrix(as.factor(testModel$classe), predictRF)
+```
+
+Model accuracy:
+
+```{r rf_accuracy}
+accuracy <- confusionMatrix(as.factor(testModel$classe), predictRF)$overall[1]
+```
+
+Thus, the trained model has an accuracy of `r accuracy` with an out-of-sample error of `r (1-accuracy)`.
+
+## Prediction of test set categories using trained model
+
+The trained model will be used to predict the "classe" variable from the cleaned test data.
+
+```{r test_finalModel, echo=T}
+testClasse <- predict(modelRF.fit, testCleaned[-53])
+testResults <- data.frame(problem_id=testCleaned$problem_id, classe=testClasse)
+testResults
+write.table(testResults, file="course_project_test_predictions.txt", sep="\t")
+```
+
+## Appendix: Figures
+
+1. Skewness values of training predictor variables
+```{r skew_plot}
+skv <- data.frame(skew=skewValues)
+ggplot(skv, aes(x=skew)) + geom_density()
+```
+2. Correlation plot of training predictor variables
+```{r correl_plot}
+corrplot(trainCleaned.cor, method="square", order="hclust", t1.cex=0.3)
+```
+3. Example visualization of a decision tree (not necessarily from random forest used in this project)
+```{r rattle_plot, cache = T}
+treeModel <- train(classe ~ ., data=trainCleaned, method="rpart", tuneLength=5)
+rattle::fancyRpartPlot(treeModel$finalModel)
+```
+4. Visualization of random forest training for optimal *m~try~*
+```{r rf_plot, cache=T}
+plot(modelRF.fit)
+```
